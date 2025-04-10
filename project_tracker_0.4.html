@@ -1,0 +1,381 @@
+<!-- Full updated HTML -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Project Time Tracker</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      background: #f0f2f5;
+      padding: 20px;
+    }
+
+    #day-controls {
+      margin-bottom: 20px;
+    }
+
+    #calendar-grid {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 10px;
+      margin-top: 10px;
+      max-width: 400px;
+    }
+
+    .calendar-cell {
+      padding: 10px;
+      text-align: center;
+      background: #ddd;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+
+    .calendar-cell.active {
+      background: #3498db;
+      color: white;
+      font-weight: bold;
+    }
+
+    #projects-container {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 15px;
+      margin-bottom: 20px;
+    }
+
+    .project {
+      position: relative;
+      background: #3498db;
+      color: white;
+      padding: 15px;
+      border-radius: 10px;
+      flex: 1 1 250px;
+      min-width: 250px;
+      cursor: pointer;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+      transition: outline 0.3s ease;
+    }
+
+    .project.running {
+      outline: 4px solid gold;
+      box-shadow: 0 0 10px gold;
+    }
+
+    .project input.name {
+      font-size: 1.2em;
+      font-weight: bold;
+      background: transparent;
+      color: white;
+      border: none;
+      width: 100%;
+      pointer-events: none;
+    }
+
+    .project input.name.editable {
+      pointer-events: auto;
+      background: rgba(255,255,255,0.2);
+    }
+
+    .time {
+      font-size: 1.6em;
+      margin-top: 10px;
+      font-family: monospace;
+    }
+
+    .actions {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      display: flex;
+      gap: 5px;
+    }
+
+    .actions button,
+    .actions input[type="color"] {
+      background: rgba(255,255,255,0.3);
+      border: none;
+      color: white;
+      cursor: pointer;
+      border-radius: 4px;
+      padding: 2px 6px;
+    }
+
+    .actions input[type="color"] {
+      width: 24px;
+      height: 24px;
+      padding: 0;
+    }
+
+    #add-project {
+      margin-top: 10px;
+    }
+
+    #chart {
+      margin-top: 30px;
+      height: 200px;
+    }
+
+    #export-btn {
+      margin-top: 20px;
+      padding: 10px 20px;
+      font-size: 16px;
+      background: #2ecc71;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="day-controls">
+    <label for="day-selector"><strong>Select Day:</strong></label>
+    <input type="date" id="day-selector">
+    <div id="calendar-grid"></div>
+  </div>
+
+  <div id="projects-container"></div>
+  <button id="add-project">➕ Add Project</button>
+  <button id="export-btn">📄 Export CSV</button>
+
+  <canvas id="chart" width="800" height="200"></canvas>
+
+  <script>
+    const container = document.getElementById('projects-container');
+    const chartCanvas = document.getElementById('chart');
+    const ctx = chartCanvas.getContext('2d');
+    const calendarGrid = document.getElementById('calendar-grid');
+    const colors = ['#e74c3c', '#2ecc71', '#3498db', '#9b59b6', '#e67e22', '#1abc9c', '#f39c12', '#34495e'];
+    let selectedDay = getToday();
+    let isReadOnly = false;
+    let projects = [];
+    let timers = [];
+    let activeTimer = null;
+
+    document.getElementById('day-selector').value = selectedDay;
+    document.getElementById('day-selector').addEventListener('change', e => updateDay(e.target.value));
+
+    function getToday() {
+      return new Date().toISOString().split('T')[0];
+    }
+
+    function updateDay(day) {
+      selectedDay = day;
+      isReadOnly = selectedDay !== getToday();
+      stopAllTimers();
+      loadProjects();
+      renderProjects();
+      renderCalendar();
+      drawChart();
+    }
+
+    function renderCalendar() {
+      calendarGrid.innerHTML = '';
+      const today = new Date();
+      const monday = new Date(today.setDate(today.getDate() - today.getDay() + 1));
+      for (let i = 0; i < 5; i++) {
+        const day = new Date(monday);
+        day.setDate(day.getDate() + i);
+        const dateStr = day.toISOString().split('T')[0];
+        const div = document.createElement('div');
+        div.className = 'calendar-cell';
+        div.textContent = ['Mon','Tue','Wed','Thu','Fri'][i];
+        if (selectedDay === dateStr) div.classList.add('active');
+        div.onclick = () => {
+          document.getElementById('day-selector').value = dateStr;
+          updateDay(dateStr);
+        };
+        calendarGrid.appendChild(div);
+      }
+    }
+
+    function loadProjects() {
+      const raw = localStorage.getItem('project_tracker_data');
+      const data = raw ? JSON.parse(raw) : {};
+      projects = data[selectedDay] || createDefaultProjects();
+      timers = projects.map(p => ({ minutes: p.minutes || 0, interval: null, seconds: 0 }));
+    }
+
+    function createDefaultProjects() {
+      return Array.from({ length: 5 }, (_, i) => ({
+        name: `Project ${i+1}`,
+        color: colors[i % colors.length],
+        minutes: 0
+      }));
+    }
+
+    function saveProjects() {
+      const raw = localStorage.getItem('project_tracker_data');
+      const data = raw ? JSON.parse(raw) : {};
+      data[selectedDay] = projects.map((p, i) => ({
+        name: p.name,
+        color: p.color,
+        minutes: timers[i].minutes
+      }));
+      localStorage.setItem('project_tracker_data', JSON.stringify(data));
+    }
+
+    function renderProjects() {
+      container.innerHTML = '';
+      projects.forEach((project, i) => {
+        const div = document.createElement('div');
+        div.className = 'project';
+        div.style.backgroundColor = project.color;
+        div.dataset.index = i;
+
+        if (timers[i].interval) div.classList.add('running');
+
+        div.onclick = (e) => {
+          if (!isReadOnly && !e.target.closest('button') && !e.target.closest('input')) toggleTimer(i);
+        };
+
+        const input = document.createElement('input');
+        input.className = 'name';
+        input.value = project.name;
+        input.readOnly = true;
+
+        const timeDiv = document.createElement('div');
+        timeDiv.className = 'time';
+        timeDiv.textContent = formatTime(timers[i].minutes, timers[i].seconds);
+
+        const actions = document.createElement('div');
+        actions.className = 'actions';
+
+        const pencil = document.createElement('button');
+        pencil.innerHTML = '🖉';
+        pencil.onclick = (e) => {
+          e.stopPropagation();
+          input.readOnly = false;
+          input.classList.add('editable');
+          input.focus();
+        };
+
+        const color = document.createElement('input');
+        color.type = 'color';
+        color.value = project.color;
+        color.onchange = (e) => {
+          project.color = e.target.value;
+          saveProjects();
+          renderProjects();
+          drawChart();
+        };
+
+        const trash = document.createElement('button');
+        trash.innerHTML = '🗑️';
+        trash.onclick = (e) => {
+          e.stopPropagation();
+          if (confirm("Delete this project?")) {
+            projects.splice(i, 1);
+            timers.splice(i, 1);
+            saveProjects();
+            renderProjects();
+            drawChart();
+          }
+        };
+
+        input.onblur = () => {
+          input.readOnly = true;
+          input.classList.remove('editable');
+          project.name = input.value;
+          saveProjects();
+        };
+
+        actions.appendChild(pencil);
+        actions.appendChild(color);
+        actions.appendChild(trash);
+        div.appendChild(actions);
+        div.appendChild(input);
+        div.appendChild(timeDiv);
+        container.appendChild(div);
+      });
+    }
+
+    function formatTime(mins, secs) {
+      const h = String(Math.floor(mins / 60)).padStart(2, '0');
+      const m = String(mins % 60).padStart(2, '0');
+      const s = String(secs).padStart(2, '0');
+      return `${h}:${m}:${s}`;
+    }
+
+    function toggleTimer(i) {
+      if (timers[i].interval) {
+        stopTimer(i);
+      } else {
+        stopAllTimers();
+        timers[i].interval = setInterval(() => {
+          timers[i].seconds++;
+          if (timers[i].seconds >= 60) {
+            timers[i].minutes++;
+            timers[i].seconds = 0;
+          }
+          renderProjects();
+        }, 1000);
+        document.querySelector(`.project[data-index="${i}"]`).classList.add('running');
+      }
+      saveProjects();
+    }
+
+    function stopTimer(i) {
+      clearInterval(timers[i].interval);
+      timers[i].interval = null;
+      const el = document.querySelector(`.project[data-index="${i}"]`);
+      if (el) el.classList.remove('running');
+    }
+
+    function stopAllTimers() {
+      timers.forEach((_, i) => stopTimer(i));
+    }
+
+    document.getElementById('add-project').onclick = () => {
+      if (isReadOnly) return;
+      const color = colors[projects.length % colors.length];
+      projects.push({ name: "New Project", color, minutes: 0 });
+      timers.push({ minutes: 0, interval: null, seconds: 0 });
+      saveProjects();
+      renderProjects();
+      drawChart();
+    };
+
+    setInterval(() => {
+      if (!isReadOnly) saveProjects();
+    }, 15 * 60 * 1000);
+
+    document.getElementById('export-btn').onclick = () => {
+      const raw = localStorage.getItem('project_tracker_data');
+      const data = raw ? JSON.parse(raw) : {};
+      let csv = 'Date,Project Name,Minutes\n';
+      for (let date in data) {
+        data[date].forEach(p => {
+          csv += `${date},${p.name},${p.minutes}\n`;
+        });
+      }
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = 'project_time_log.csv';
+      link.click();
+    };
+
+    function drawChart() {
+      ctx.clearRect(0, 0, chartCanvas.width, chartCanvas.height);
+      const max = Math.max(...timers.map(t => t.minutes), 1);
+      const barWidth = 40;
+      const spacing = 20;
+      const base = chartCanvas.height - 30;
+
+      timers.forEach((timer, i) => {
+        const height = (timer.minutes / max) * (chartCanvas.height - 40);
+        ctx.fillStyle = projects[i].color;
+        ctx.fillRect(i * (barWidth + spacing) + 40, base - height, barWidth, height);
+        ctx.fillStyle = "#000";
+        ctx.fillText(timer.minutes + 'm', i * (barWidth + spacing) + 40, base + 15);
+      });
+    }
+
+    // Init
+    updateDay(getToday());
+  </script>
+</body>
+</html>
